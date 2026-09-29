@@ -1,0 +1,36 @@
+namespace: $(K8S_NAMESPACE)
+
+replicaCount: $(BACKEND_ONE_REPLICA_COUNT)
+
+image:
+  repository: "$(BACKEND_ONE_IMAGE_URI)"
+  tag: "$(Build.BuildId)"
+  pullPolicy: Always
+
+service:
+  name: backend-one-service
+  type: ClusterIP
+  port: 80
+  targetPort: $(BACKEND_ONE_PORT)
+
+resources:
+  requests:
+    cpu: "$(BACKEND_ONE_CPU)"
+    memory: "$(BACKEND_ONE_MEMORY)"
+  limits:
+    cpu: "$(BACKEND_ONE_CPU)"
+    memory: "$(BACKEND_ONE_MEMORY)"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  paths:
+    - path: /api/service-one
+      pathType: Prefix
+      serviceName: backend-one-service
+      servicePort: 80
+    - path: /api/service-two
+      pathType: Prefix
+      serviceName: backend-two-service
+      servicePort: 80

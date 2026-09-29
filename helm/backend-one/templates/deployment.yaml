@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-one
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: backend-one
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: backend-one
+  template:
+    metadata:
+      labels:
+        app: backend-one
+    spec:
+      containers:
+        - name: backend-one
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

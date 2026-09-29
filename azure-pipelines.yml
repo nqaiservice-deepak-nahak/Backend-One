@@ -1,0 +1,94 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: backend-one-variables
+
+stages:
+  - stage: BuildAndPush
+    displayName: Build and push Backend One
+    jobs:
+      - job: Build
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: Replace .env.prod placeholders
+            inputs:
+              targetType: inline
+              script: |
+                python3 scripts/replace_tokens.py .env.prod \
+                  --replace '{{BACKEND_ONE_PORT}}=BACKEND_ONE_PORT' \
+                  --replace '{{BACKEND_ONE_MESSAGE}}=BACKEND_ONE_MESSAGE' \
+                  --replace '{{ENVIRONMENT}}=ENVIRONMENT'
+            env:
+              BACKEND_ONE_PORT: $(BACKEND_ONE_PORT)
+              BACKEND_ONE_MESSAGE: $(BACKEND_ONE_MESSAGE)
+              ENVIRONMENT: $(ENVIRONMENT)
+
+          - task: Docker@2
+            displayName: Build and push Backend One image
+            inputs:
+              command: buildAndPush
+              containerRegistry: $(ACR_SERVICE_CONNECTION)
+              repository: backend-one
+              dockerfile: Dockerfile
+              buildContext: .
+              tags: |
+                $(Build.BuildId)
+
+  - stage: Deploy
+    displayName: Deploy Backend One with Helm
+    dependsOn: BuildAndPush
+    condition: succeeded()
+    jobs:
+      - job: Deploy
+        steps:
+          - checkout: self
+
+          - task: Bash@3
+            displayName: Replace values.yaml placeholders
+            inputs:
+              targetType: inline
+              script: |
+                python3 scripts/replace_tokens.py helm/backend-one/values.yaml \
+                  --replace '$(K8S_NAMESPACE)=K8S_NAMESPACE' \
+                  --replace '$(BACKEND_ONE_REPLICA_COUNT)=BACKEND_ONE_REPLICA_COUNT' \
+                  --replace '$(BACKEND_ONE_IMAGE_URI)=BACKEND_ONE_IMAGE_URI' \
+                  --replace '$(Build.BuildId)=BUILD_BUILD_ID' \
+                  --replace '$(BACKEND_ONE_PORT)=BACKEND_ONE_PORT' \
+                  --replace '$(BACKEND_ONE_CPU)=BACKEND_ONE_CPU' \
+                  --replace '$(BACKEND_ONE_MEMORY)=BACKEND_ONE_MEMORY'
+            env:
+              K8S_NAMESPACE: $(K8S_NAMESPACE)
+              BACKEND_ONE_REPLICA_COUNT: $(BACKEND_ONE_REPLICA_COUNT)
+              BACKEND_ONE_IMAGE_URI: $(BACKEND_ONE_IMAGE_URI)
+              BUILD_BUILD_ID: $(Build.BuildId)
+              BACKEND_ONE_PORT: $(BACKEND_ONE_PORT)
+              BACKEND_ONE_CPU: $(BACKEND_ONE_CPU)
+              BACKEND_ONE_MEMORY: $(BACKEND_ONE_MEMORY)
+
+          - task: AzureCLI@2
+            displayName: Helm deploy Backend One
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az aks get-credentials \
+                  --resource-group "$(AKS_RESOURCE_GROUP)" \
+                  --name "$(AKS_CLUSTER_NAME)" \
+                  --overwrite-existing
+
+                helm upgrade --install backend-one helm/backend-one \
+                  --namespace "$(K8S_NAMESPACE)" \
+                  --create-namespace
+
+                kubectl get pods -n "$(K8S_NAMESPACE)"
+                kubectl get svc -n "$(K8S_NAMESPACE)"
+                kubectl get ingress -n "$(K8S_NAMESPACE)"
