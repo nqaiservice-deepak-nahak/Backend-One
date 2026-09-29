@@ -1,0 +1,127 @@
+name: Deploy Backend One to AKS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME }}
+  ACR_NAME: ${{ vars.ACR_NAME }}
+
+  K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+
+  BACKEND_ONE_IMAGE_URI: ${{ vars.BACKEND_ONE_IMAGE_URI }}
+  BACKEND_ONE_PORT: ${{ vars.BACKEND_ONE_PORT }}
+  BACKEND_ONE_MESSAGE: ${{ vars.BACKEND_ONE_MESSAGE }}
+
+  ENVIRONMENT: ${{ vars.ENVIRONMENT }}
+
+  BACKEND_ONE_REPLICA_COUNT: ${{ vars.BACKEND_ONE_REPLICA_COUNT }}
+  BACKEND_ONE_CPU: ${{ vars.BACKEND_ONE_CPU }}
+  BACKEND_ONE_MEMORY: ${{ vars.BACKEND_ONE_MEMORY }}
+
+  IMAGE_TAG: ${{ github.run_number }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Prepare .env.prod
+        shell: bash
+        run: |
+          sed -i "s|{{BACKEND_ONE_PORT}}|${BACKEND_ONE_PORT}|g" .env.prod
+          sed -i "s|{{BACKEND_ONE_MESSAGE}}|${BACKEND_ONE_MESSAGE}|g" .env.prod
+          sed -i "s|{{ENVIRONMENT}}|${ENVIRONMENT}|g" .env.prod
+
+      - name: Login to ACR
+        shell: bash
+        run: |
+          az acr login --name "${ACR_NAME}"
+
+      - name: Build Docker image
+        shell: bash
+        run: |
+          docker build \
+            -t "${BACKEND_ONE_IMAGE_URI}:${IMAGE_TAG}" \
+            .
+
+      - name: Push Docker image
+        shell: bash
+        run: |
+          docker push "${BACKEND_ONE_IMAGE_URI}:${IMAGE_TAG}"
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Setup kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: 'v0.2.20'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v5
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+          admin: 'false'
+          use-kubelogin: 'true'
+
+      - name: Test AKS connection
+        run: |
+          kubectl get nodes
+
+      - name: Prepare Helm values
+        shell: bash
+        run: |
+          VALUES_FILE="helm/backend-one/values.yaml"
+
+          sed -i "s|\$(K8S_NAMESPACE)|${K8S_NAMESPACE}|g" "${VALUES_FILE}"
+          sed -i "s|\$(BACKEND_ONE_REPLICA_COUNT)|${BACKEND_ONE_REPLICA_COUNT}|g" "${VALUES_FILE}"
+          sed -i "s|\$(BACKEND_ONE_IMAGE_URI)|${BACKEND_ONE_IMAGE_URI}|g" "${VALUES_FILE}"
+          sed -i "s|\$(IMAGE_TAG)|${IMAGE_TAG}|g" "${VALUES_FILE}"
+          sed -i "s|\$(BACKEND_ONE_PORT)|${BACKEND_ONE_PORT}|g" "${VALUES_FILE}"
+          sed -i "s|\$(BACKEND_ONE_CPU)|${BACKEND_ONE_CPU}|g" "${VALUES_FILE}"
+          sed -i "s|\$(BACKEND_ONE_MEMORY)|${BACKEND_ONE_MEMORY}|g" "${VALUES_FILE}"
+
+      - name: Helm lint
+        run: |
+          helm lint helm/backend-one
+
+      - name: Deploy Backend One
+        run: |
+          helm upgrade --install backend-one helm/backend-one \
+            --namespace "${K8S_NAMESPACE}" \
+            --create-namespace \
+            --wait \
+            --timeout 5m
+
+      - name: Verify deployment
+        run: |
+          echo "===== PODS ====="
+          kubectl get pods -n "${K8S_NAMESPACE}"
+
+          echo "===== SERVICES ====="
+          kubectl get svc -n "${K8S_NAMESPACE}"
+
+          echo "===== INGRESS ====="
+          kubectl get ingress -n "${K8S_NAMESPACE}"
